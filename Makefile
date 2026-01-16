@@ -9,9 +9,10 @@ LIB_NAME := libconsole_input.a
 SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 
-.PHONY: all clean example
+.PHONY: all clean example test
 
 EXAMPLES := examples/basic examples/user_data
+TESTS := tests/test_sync tests/test_async
 
 all: $(LIB_NAME)
 
@@ -27,8 +28,18 @@ $(OBJ_DIR):
 
 example: $(LIB_NAME) $(EXAMPLES)
 
+test: $(LIB_NAME) $(TESTS)
+	@set -e; \
+	for t in $(TESTS); do \
+		echo "Running $$t"; \
+		./$$t; \
+	done
+
 examples/%: examples/%.c $(LIB_NAME)
 	$(CC) $(CFLAGS) -I$(INC_DIR) $< $(LIB_NAME) -o $@
 
+tests/%: tests/%.c $(LIB_NAME)
+	$(CC) $(CFLAGS) -I$(INC_DIR) -Itests $< $(LIB_NAME) -o $@ $(LDLIBS)
+
 clean:
-	rm -rf $(OBJ_DIR) $(LIB_NAME) $(EXAMPLES)
+	rm -rf $(OBJ_DIR) $(LIB_NAME) $(EXAMPLES) $(TESTS)
