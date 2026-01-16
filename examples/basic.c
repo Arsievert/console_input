@@ -20,6 +20,7 @@ static void on_quit(const char *line, void *user_data) {
     printf("Quit command received.\n");
     fflush(stdout);
     keep_running = 0;
+    ci_request_stop_async_input();
 }
 
 static void on_ping(const char *line, void *user_data) {

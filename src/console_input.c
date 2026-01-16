@@ -184,12 +184,11 @@ static void *ci_async_thread(void *arg) {
         ci_command_entry entry;
         if (ci_lookup_command(buffer, &entry) && entry.cb) {
             entry.cb(buffer, entry.user_data);
-            continue;
-        }
-
-        if (ci_cb) {
+        } else if (ci_cb) {
             ci_cb(buffer, ci_cb_data);
         }
+
+        if (ci_stop_requested) break;
     }
 
     ci_running = false;
@@ -280,6 +279,10 @@ void ci_stop_async_input(void) {
     ci_prompt = NULL;
     ci_command_count = 0;
     ci_stop_requested = false;
+}
+
+void ci_request_stop_async_input(void) {
+    ci_stop_requested = true;
 }
 
 bool ci_async_is_running(void) {

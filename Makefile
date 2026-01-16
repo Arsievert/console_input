@@ -11,6 +11,8 @@ OBJS := $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 
 .PHONY: all clean example
 
+EXAMPLES := examples/basic examples/user_data
+
 all: $(LIB_NAME)
 
 $(LIB_NAME): $(OBJS)
@@ -23,8 +25,10 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 $(OBJ_DIR):
 	@mkdir -p $@
 
-example: $(LIB_NAME)
-	$(CC) $(CFLAGS) -I$(INC_DIR) examples/basic.c $(LIB_NAME) -o examples/basic
+example: $(LIB_NAME) $(EXAMPLES)
+
+examples/%: examples/%.c $(LIB_NAME)
+	$(CC) $(CFLAGS) -I$(INC_DIR) $< $(LIB_NAME) -o $@
 
 clean:
-	rm -rf $(OBJ_DIR) $(LIB_NAME) examples/basic
+	rm -rf $(OBJ_DIR) $(LIB_NAME) $(EXAMPLES)

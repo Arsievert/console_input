@@ -76,7 +76,13 @@ void ci_stop_async_input(void);
  */
 bool ci_async_is_running(void);
 
+/**
+ * @brief Request the async input thread to stop; safe to call from callbacks.
+ */
+void ci_request_stop_async_input(void);
+
 /* Command callbacks. Thread-safe for registration while async input runs. */
+
 /**
  * @brief Register (or replace) a command string callback.
  * @param command Exact command string to match (max CI_COMMAND_MAX_LEN-1 chars).
