@@ -20,7 +20,7 @@ This starts an async input thread with prompt `(q/ping/any)>`. The main thread c
 ## API
 
 ```c
-#include "ci_input.h"
+#include "console_input.h"
 
 /* Blocking convenience helpers (sync) */
 ci_status ci_read_line(FILE *stream, char *buffer, size_t size);
