@@ -1,16 +1,25 @@
 #include "console_input.h"
 
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
-#include <pthread.h>
-#include <signal.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define CI_ASYNC_BUFFER 256
+/* ---- Platform mutex abstraction ---- */
+
+#ifdef CI_PLATFORM_FREERTOS
+#include "FreeRTOS.h"
+#include "semphr.h"
+static SemaphoreHandle_t ci_cmd_mutex;
+#define ci_mutex_lock(mp)   xSemaphoreTake(*(mp), portMAX_DELAY)
+#define ci_mutex_unlock(mp) xSemaphoreGive(*(mp))
+#else
+#include <pthread.h>
+static pthread_mutex_t ci_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define ci_mutex_lock(mp)   pthread_mutex_lock(mp)
+#define ci_mutex_unlock(mp) pthread_mutex_unlock(mp)
+#endif
+
+/* ---- Shared state ---- */
 
 typedef struct {
     char command[CI_COMMAND_MAX_LEN];
@@ -18,27 +27,122 @@ typedef struct {
     void *user_data;
 } ci_command_entry;
 
-static pthread_t ci_thread;
 static ci_line_callback ci_cb = NULL;
 static void *ci_cb_data = NULL;
-static const char *ci_prompt = NULL;
-static volatile bool ci_running = false;
-static volatile bool ci_stop_requested = false;
-static bool ci_thread_valid = false;
 static ci_command_entry ci_commands[CI_MAX_COMMANDS];
 static size_t ci_command_count = 0;
-static pthread_mutex_t ci_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* ---- Portable API ---- */
+
+void ci_init(void) {
+#ifdef CI_PLATFORM_FREERTOS
+    ci_cmd_mutex = xSemaphoreCreateMutex();
+#endif
+}
+
+ci_status ci_set_default_callback(ci_line_callback callback, void *user_data) {
+    if (!callback) return CI_INVALID;
+    ci_cb = callback;
+    ci_cb_data = user_data;
+    return CI_OK;
+}
+
+static bool ci_lookup_command(const char *line, ci_command_entry *out_entry) {
+    if (!line || !out_entry) return false;
+
+    bool found = false;
+    ci_mutex_lock(&ci_cmd_mutex);
+    for (size_t i = 0; i < ci_command_count; i++) {
+        if (strcmp(line, ci_commands[i].command) == 0) {
+            *out_entry = ci_commands[i];
+            found = true;
+            break;
+        }
+    }
+    ci_mutex_unlock(&ci_cmd_mutex);
+    return found;
+}
+
+ci_status ci_process_line(const char *line) {
+    if (!line) return CI_INVALID;
+
+    ci_command_entry entry;
+    if (ci_lookup_command(line, &entry) && entry.cb) {
+        entry.cb(line, entry.user_data);
+    } else if (ci_cb) {
+        ci_cb(line, ci_cb_data);
+    }
+    return CI_OK;
+}
+
+ci_status ci_register_command(const char *command, ci_line_callback callback, void *user_data) {
+    if (!command || !callback) return CI_INVALID;
+    if (strlen(command) >= CI_COMMAND_MAX_LEN) return CI_OVERFLOW;
+
+    ci_mutex_lock(&ci_cmd_mutex);
+
+    for (size_t i = 0; i < ci_command_count; i++) {
+        if (strcmp(command, ci_commands[i].command) == 0) {
+            ci_commands[i].cb = callback;
+            ci_commands[i].user_data = user_data;
+            ci_mutex_unlock(&ci_cmd_mutex);
+            return CI_OK;
+        }
+    }
+
+    if (ci_command_count >= CI_MAX_COMMANDS) {
+        ci_mutex_unlock(&ci_cmd_mutex);
+        return CI_OVERFLOW;
+    }
+
+    ci_command_entry *slot = &ci_commands[ci_command_count++];
+    strncpy(slot->command, command, CI_COMMAND_MAX_LEN);
+    slot->command[CI_COMMAND_MAX_LEN - 1] = '\0';
+    slot->cb = callback;
+    slot->user_data = user_data;
+
+    ci_mutex_unlock(&ci_cmd_mutex);
+    return CI_OK;
+}
+
+ci_status ci_unregister_command(const char *command) {
+    if (!command) return CI_INVALID;
+
+    ci_mutex_lock(&ci_cmd_mutex);
+    for (size_t i = 0; i < ci_command_count; i++) {
+        if (strcmp(command, ci_commands[i].command) == 0) {
+            ci_command_count--;
+            if (i != ci_command_count) {
+                ci_commands[i] = ci_commands[ci_command_count];
+            }
+            ci_mutex_unlock(&ci_cmd_mutex);
+            return CI_OK;
+        }
+    }
+    ci_mutex_unlock(&ci_cmd_mutex);
+
+    return CI_INVALID;
+}
+
+/* ---- POSIX-only implementation ---- */
+
+#ifndef CI_PLATFORM_FREERTOS
+
+#include <errno.h>
+#include <limits.h>
+#include <stdatomic.h>
+#include <stdio.h>
+
+#define CI_ASYNC_BUFFER 256
+
+static pthread_t ci_thread;
+static const char *ci_prompt = NULL;
+static atomic_bool ci_running = false;
+static atomic_bool ci_stop_requested = false;
+static bool ci_thread_valid = false;
 
 static void *ci_async_thread(void *arg);
 
-/**
- * @brief Read a single line with optional prompt into a buffer.
- * @param stream Input stream to read from.
- * @param prompt Optional prompt to write to stdout before reading.
- * @param buffer Destination buffer for the line.
- * @param size Size of the destination buffer.
- * @return CI_OK on success, CI_EOF on end-of-file, CI_OVERFLOW on truncation, CI_INVALID on error.
- */
 static ci_status ci_read_line_internal(FILE *stream, const char *prompt, char *buffer, size_t size) {
     if (!buffer || size == 0) return CI_INVALID;
 
@@ -64,12 +168,6 @@ static ci_status ci_read_line_internal(FILE *stream, const char *prompt, char *b
     return CI_OK;
 }
 
-/**
- * @brief Parse a long from a string with overflow and validation checks.
- * @param input Input string to parse.
- * @param out_value Output pointer for parsed value.
- * @return CI_OK on success, CI_OVERFLOW on range error, CI_INVALID on parse error.
- */
 static ci_status ci_parse_long(const char *input, long *out_value) {
     if (!input || !out_value) return CI_INVALID;
 
@@ -97,12 +195,6 @@ ci_status ci_prompt_line(const char *prompt, char *buffer, size_t size) {
     return ci_read_line_internal(stdin, prompt, buffer, size);
 }
 
-/**
- * @brief Prompt repeatedly until a valid numeric (long) value is entered.
- * @param prompt Prompt text to display.
- * @param out_value Output pointer for parsed long.
- * @return CI_OK on success, CI_EOF if input ends, CI_OVERFLOW on length/range issues, CI_INVALID on other errors.
- */
 static ci_status ci_prompt_numeric(const char *prompt, long *out_value) {
     char buf[128];
     ci_status status;
@@ -139,33 +231,6 @@ ci_status ci_read_long(const char *prompt, long *out_value) {
     return ci_prompt_numeric(prompt, out_value);
 }
 
-/**
- * @brief Lookup a registered command matching the given line.
- * @param line Input line to match.
- * @param out_entry Output copy of the matched entry when found.
- * @return true if a command matched, false otherwise.
- */
-static bool ci_lookup_command(const char *line, ci_command_entry *out_entry) {
-    if (!line || !out_entry) return false;
-
-    bool found = false;
-    pthread_mutex_lock(&ci_cmd_mutex);
-    for (size_t i = 0; i < ci_command_count; i++) {
-        if (strcmp(line, ci_commands[i].command) == 0) {
-            *out_entry = ci_commands[i];
-            found = true;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&ci_cmd_mutex);
-    return found;
-}
-
-/**
- * @brief Thread routine that reads lines and dispatches to commands/default callback.
- * @param arg Unused thread argument.
- * @return NULL when thread exits.
- */
 static void *ci_async_thread(void *arg) {
     (void)arg;
     char buffer[CI_ASYNC_BUFFER];
@@ -182,12 +247,7 @@ static void *ci_async_thread(void *arg) {
         }
         if (status != CI_OK) continue;
 
-        ci_command_entry entry;
-        if (ci_lookup_command(buffer, &entry) && entry.cb) {
-            entry.cb(buffer, entry.user_data);
-        } else if (ci_cb) {
-            ci_cb(buffer, ci_cb_data);
-        }
+        ci_process_line(buffer);
 
         if (ci_stop_requested) break;
     }
@@ -201,8 +261,7 @@ ci_status ci_start_async_input(const char *prompt, ci_line_callback callback, vo
     if (!callback) return CI_INVALID;
     if (ci_running) return CI_INVALID;
 
-    ci_cb = callback;
-    ci_cb_data = user_data;
+    ci_set_default_callback(callback, user_data);
     ci_prompt = prompt;
     ci_command_count = 0;
     ci_stop_requested = false;
@@ -216,56 +275,6 @@ ci_status ci_start_async_input(const char *prompt, ci_line_callback callback, vo
 
     ci_thread_valid = true;
     return CI_OK;
-}
-
-ci_status ci_register_command(const char *command, ci_line_callback callback, void *user_data) {
-    if (!command || !callback) return CI_INVALID;
-    if (strlen(command) >= CI_COMMAND_MAX_LEN) return CI_OVERFLOW;
-
-    pthread_mutex_lock(&ci_cmd_mutex);
-
-    /* replace if already present */
-    for (size_t i = 0; i < ci_command_count; i++) {
-        if (strcmp(command, ci_commands[i].command) == 0) {
-            ci_commands[i].cb = callback;
-            ci_commands[i].user_data = user_data;
-            pthread_mutex_unlock(&ci_cmd_mutex);
-            return CI_OK;
-        }
-    }
-
-    if (ci_command_count >= CI_MAX_COMMANDS) {
-        pthread_mutex_unlock(&ci_cmd_mutex);
-        return CI_OVERFLOW;
-    }
-
-    ci_command_entry *slot = &ci_commands[ci_command_count++];
-    strncpy(slot->command, command, CI_COMMAND_MAX_LEN);
-    slot->command[CI_COMMAND_MAX_LEN - 1] = '\0';
-    slot->cb = callback;
-    slot->user_data = user_data;
-
-    pthread_mutex_unlock(&ci_cmd_mutex);
-    return CI_OK;
-}
-
-ci_status ci_unregister_command(const char *command) {
-    if (!command) return CI_INVALID;
-
-    pthread_mutex_lock(&ci_cmd_mutex);
-    for (size_t i = 0; i < ci_command_count; i++) {
-        if (strcmp(command, ci_commands[i].command) == 0) {
-            ci_command_count--;
-            if (i != ci_command_count) {
-                ci_commands[i] = ci_commands[ci_command_count];
-            }
-            pthread_mutex_unlock(&ci_cmd_mutex);
-            return CI_OK;
-        }
-    }
-    pthread_mutex_unlock(&ci_cmd_mutex);
-
-    return CI_INVALID;
 }
 
 void ci_stop_async_input(void) {
@@ -293,3 +302,5 @@ void ci_request_stop_async_input(void) {
 bool ci_async_is_running(void) {
     return ci_running;
 }
+
+#endif /* CI_PLATFORM_FREERTOS */

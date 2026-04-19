@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
 
 typedef enum {
     CI_OK = 0,
@@ -16,13 +15,58 @@ typedef void (*ci_line_callback)(const char *line, void *user_data);
 #define CI_COMMAND_MAX_LEN 64
 #define CI_MAX_COMMANDS 32
 
+/* ---- Portable API (all platforms) ---- */
+
+/**
+ * @brief Initialize the library. Required on FreeRTOS; optional (no-op) on POSIX.
+ */
+void ci_init(void);
+
+/**
+ * @brief Set the default callback for lines that don't match any registered command.
+ * @param callback Callback invoked for unmatched lines.
+ * @param user_data User pointer passed to the callback.
+ * @return CI_OK on success, CI_INVALID if callback is NULL.
+ */
+ci_status ci_set_default_callback(ci_line_callback callback, void *user_data);
+
+/**
+ * @brief Dispatch a line to the matching command callback, or the default callback.
+ * @param line Input line to dispatch.
+ * @return CI_OK on success, CI_INVALID if line is NULL.
+ */
+ci_status ci_process_line(const char *line);
+
+/**
+ * @brief Register (or replace) a command string callback.
+ * @param command Exact command string to match (max CI_COMMAND_MAX_LEN-1 chars).
+ * @param callback Callback to invoke when the command matches.
+ * @param user_data User pointer passed to the callback.
+ * @return CI_OK on success, CI_OVERFLOW if table is full/command too long, CI_INVALID on bad args.
+ */
+ci_status ci_register_command(const char *command,
+                               ci_line_callback callback,
+                               void *user_data);
+
+/**
+ * @brief Remove a previously registered command callback.
+ * @param command Command string to remove.
+ * @return CI_OK if removed, CI_INVALID if not found or bad args.
+ */
+ci_status ci_unregister_command(const char *command);
+
+/* ---- POSIX-only API ---- */
+
+#ifndef CI_PLATFORM_FREERTOS
+
+#include <stdio.h>
+
 /**
  * @brief Read a single line from the given stream.
  * @param stream Input stream (e.g., stdin).
  * @param buffer Destination buffer for the line.
  * @param size Size of the destination buffer.
  * @return CI_OK on success, CI_EOF on end-of-file, CI_OVERFLOW if truncated, CI_INVALID on error.
- * @note Blocking convenience helper for synchronous use.
  */
 ci_status ci_read_line(FILE *stream, char *buffer, size_t size);
 
@@ -32,7 +76,6 @@ ci_status ci_read_line(FILE *stream, char *buffer, size_t size);
  * @param buffer Destination buffer for the line.
  * @param size Size of the destination buffer.
  * @return CI_OK on success, CI_EOF on end-of-file, CI_OVERFLOW if truncated, CI_INVALID on error.
- * @note Blocking convenience helper for synchronous use.
  */
 ci_status ci_prompt_line(const char *prompt, char *buffer, size_t size);
 
@@ -41,7 +84,6 @@ ci_status ci_prompt_line(const char *prompt, char *buffer, size_t size);
  * @param prompt Prompt text to display.
  * @param out_value Output pointer for the parsed int.
  * @return CI_OK on success, CI_EOF on end-of-file, CI_OVERFLOW on range/length issues, CI_INVALID on parse error.
- * @note Blocking convenience helper for synchronous use.
  */
 ci_status ci_read_int(const char *prompt, int *out_value);
 
@@ -50,7 +92,6 @@ ci_status ci_read_int(const char *prompt, int *out_value);
  * @param prompt Prompt text to display.
  * @param out_value Output pointer for the parsed long.
  * @return CI_OK on success, CI_EOF on end-of-file, CI_OVERFLOW on range/length issues, CI_INVALID on parse error.
- * @note Blocking convenience helper for synchronous use.
  */
 ci_status ci_read_long(const char *prompt, long *out_value);
 
@@ -81,24 +122,6 @@ bool ci_async_is_running(void);
  */
 void ci_request_stop_async_input(void);
 
-/* Command callbacks. Thread-safe for registration while async input runs. */
+#endif /* CI_PLATFORM_FREERTOS */
 
-/**
- * @brief Register (or replace) a command string callback.
- * @param command Exact command string to match (max CI_COMMAND_MAX_LEN-1 chars).
- * @param callback Callback to invoke when the command matches.
- * @param user_data User pointer passed to the callback.
- * @return CI_OK on success, CI_OVERFLOW if table is full/command too long, CI_INVALID on bad args.
- */
-ci_status ci_register_command(const char *command,
-                               ci_line_callback callback,
-                               void *user_data);
-
-/**
- * @brief Remove a previously registered command callback.
- * @param command Command string to remove.
- * @return CI_OK if removed, CI_INVALID if not found or bad args.
- */
-ci_status ci_unregister_command(const char *command);
-
-#endif
+#endif /* CI_INPUT_H */

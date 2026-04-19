@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -Wall -Wextra -Werror -std=c99 -pedantic
+CFLAGS ?= -Wall -Wextra -Werror -std=c11 -pedantic
 LDLIBS ?= -pthread
 INC_DIR := include
 SRC_DIR := src

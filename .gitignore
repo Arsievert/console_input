@@ -1,3 +1,9 @@
 build/
-libconsole_input.a
+*.a
+*.dSYM/
+
 examples/basic
+examples/user_data
+
+tests/test_sync
+tests/test_async

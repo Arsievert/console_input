@@ -1,12 +1,13 @@
 #include "console_input.h"
 #include "test.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
-static volatile int default_calls = 0;
-static volatile int cmd_calls = 0;
-static volatile int quit_calls = 0;
+static atomic_int default_calls = 0;
+static atomic_int cmd_calls = 0;
+static atomic_int quit_calls = 0;
 
 static void default_cb(const char *line, void *user_data) {
     (void)user_data;
