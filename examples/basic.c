@@ -1,5 +1,4 @@
 #include "console_input.h"
-#include "console_input.h"
 
 #include <stdio.h>
 #include <unistd.h>

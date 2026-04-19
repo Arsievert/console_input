@@ -64,7 +64,7 @@ static void test_command_dispatch_and_default(void) {
     ASSERT_STATUS(CI_OK, st);
     ASSERT_STATUS(CI_OK, ci_register_command("ping", cmd_cb, NULL));
 
-    write(write_fd, "ping\nother\n", 10);
+    write(write_fd, "ping\nother\n", 11);
     close(write_fd);
 
     /* wait for both callbacks or timeout */

@@ -24,6 +24,7 @@ static void *ci_cb_data = NULL;
 static const char *ci_prompt = NULL;
 static volatile bool ci_running = false;
 static volatile bool ci_stop_requested = false;
+static bool ci_thread_valid = false;
 static ci_command_entry ci_commands[CI_MAX_COMMANDS];
 static size_t ci_command_count = 0;
 static pthread_mutex_t ci_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -76,7 +77,7 @@ static ci_status ci_parse_long(const char *input, long *out_value) {
     char *endptr = NULL;
     long val = strtol(input, &endptr, 10);
 
-    if (errno == ERANGE || val > LONG_MAX || val < LONG_MIN) {
+    if (errno == ERANGE) {
         return CI_OVERFLOW;
     }
 
@@ -213,6 +214,7 @@ ci_status ci_start_async_input(const char *prompt, ci_line_callback callback, vo
         return CI_INVALID;
     }
 
+    ci_thread_valid = true;
     return CI_OK;
 }
 
@@ -267,12 +269,15 @@ ci_status ci_unregister_command(const char *command) {
 }
 
 void ci_stop_async_input(void) {
-    if (!ci_running) return;
+    if (!ci_thread_valid) return;
 
     ci_stop_requested = true;
-    pthread_cancel(ci_thread);
+    if (ci_running) {
+        pthread_cancel(ci_thread);
+    }
     pthread_join(ci_thread, NULL);
 
+    ci_thread_valid = false;
     ci_running = false;
     ci_cb = NULL;
     ci_cb_data = NULL;
